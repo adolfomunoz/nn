@@ -153,14 +153,6 @@ public:
     }
 };
 
-namespace {
-    class RandomAccess {
-    public:
-        template<typename T>
-        operator()(const T& t, std::size_t i) const { return t[i]; }
-    };
-};
-
 template<std::size_t N,typename C,typename A>
 auto kdtree(const C& c, const A& ap) { 
     return KDTree<std::decay_t<typename C::value_type>,N,std::decay_t<A>>(c,ap); 
@@ -173,9 +165,23 @@ auto kdtree(const C& c, std::enable_if_t<std::is_arithmetic_v<std::decay_t<declt
 } 
 
 template<typename C>
-auto kdtree(const C& c, std::enable_if_t<std::tuple_size_v<typename C::value_type> >= 1>* sfinae = nullptr) {
+auto kdtree(const C& c, std::enable_if_t<(std::tuple_size_v<typename C::value_type> >= 1) && 
+            std::is_arithmetic_v<std::decay_t<decltype(std::get<0>(std::declval<typename C::value_type>()))>>>* sfinae = nullptr) {
     return kdtree<std::tuple_size_v<typename C::value_type>>(c);
 }
+
+template<std::size_t N, typename C>
+auto kdtree(const C& c, std::enable_if_t<(std::tuple_size_v<typename C::value_type> > 1) && 
+            std::is_arithmetic_v<std::decay_t<decltype(std::get<0>(std::declval<typename C::value_type>())[0])>>>* sfinae = nullptr) {
+    return kdtree<N>(c, [] (const auto& t, std::size_t i) { return std::get<0>(t)[i]; });
+}
+
+template<typename C>
+auto kdtree(const C& c, std::enable_if_t<(std::tuple_size_v<typename C::value_type> > 1) && 
+            std::is_arithmetic_v<std::decay_t<decltype(std::get<0>(std::get<0>(std::declval<typename C::value_type>())))>>>* sfinae = nullptr) {
+    return kdtree<std::tuple_size_v<std::decay_t<decltype(std::get<0>(std::declval<typename C::value_type>()))>>>(c);
+}
+
 
 
 };
