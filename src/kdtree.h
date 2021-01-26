@@ -7,6 +7,19 @@
 
 namespace nn {
     
+namespace {
+    class RandomAccess {
+    public:
+        template<typename T>
+        constexpr auto operator()(const T& t, std::size_t i) const { return t[i]; } 
+    };
+    class RandomAccessTupleFirst {
+    public:
+        template<typename T>
+        constexpr auto operator()(const T& t, std::size_t i) const { return std::get<0>(t)[i]; } 
+    };
+};
+    
 /**
  * T - Data type contained in the KD Tree
  * N - Number of dimensions of the KD Tree (1 == binary tree)
@@ -16,8 +29,10 @@ namespace nn {
 **/
 template<typename T, std::size_t N, typename A>
 class KDTree {
+public:
     using real = decltype(std::declval<A>()(std::declval<T>(),std::size_t(0)));
     
+private:
     A axis_position;
     using axis_type = std::size_t; //The axis type is std::size_t but we might want to reduce its size in compile time when N<256...
     //elements and nodes are sorted equally so the element pointed by the ith node in node is the ith element in elements 
@@ -118,9 +133,10 @@ class KDTree {
     }     
     
 public:
-    KDTree(std::vector<T>&& elements, const A& axis_position) : elements(std::move(elements)), axis_position(axis_position) { build_tree(); }
+    KDTree(std::vector<T>&& elements, const A& axis_position = A()) : elements(std::move(elements)), axis_position(axis_position) { build_tree(); }
+    KDTree() {}
     template<typename C> //Constructing from a general collection if possible
-    KDTree(const C& c, const A& axis_position, typename std::enable_if<std::is_same<T,typename C::value_type>::value>::type* sfinae = nullptr) : elements(c), axis_position(axis_position) { build_tree(); }
+    KDTree(const C& c, const A& axis_position = A(), typename std::enable_if<std::is_same<T,typename C::value_type>::value>::type* sfinae = nullptr) : elements(c), axis_position(axis_position) { build_tree(); }
     
     template<typename Norm>
     std::vector<const T*> nearest_neighbors(const std::array<real,N>& p, std::size_t number, float max_distance, const Norm& norm) const {
@@ -161,7 +177,7 @@ auto kdtree(const C& c, const A& ap) {
 
 template<std::size_t N, typename C>
 auto kdtree(const C& c, std::enable_if_t<std::is_arithmetic_v<std::decay_t<decltype(std::declval<typename C::value_type>()[0])>>>* sfinae = nullptr) {   
-    return kdtree<N>(c,[] (const auto& t, std::size_t i) { return t[i]; });   
+    return kdtree<N>(c,RandomAccess());   
 } 
 
 template<typename C>
@@ -173,7 +189,7 @@ auto kdtree(const C& c, std::enable_if_t<(std::tuple_size_v<typename C::value_ty
 template<std::size_t N, typename C>
 auto kdtree(const C& c, std::enable_if_t<(std::tuple_size_v<typename C::value_type> > 1) && 
             std::is_arithmetic_v<std::decay_t<decltype(std::get<0>(std::declval<typename C::value_type>())[0])>>>* sfinae = nullptr) {
-    return kdtree<N>(c, [] (const auto& t, std::size_t i) { return std::get<0>(t)[i]; });
+    return kdtree<N>(c, RandomAccessTupleFirst());
 }
 
 template<typename C>
@@ -182,6 +198,79 @@ auto kdtree(const C& c, std::enable_if_t<(std::tuple_size_v<typename C::value_ty
     return kdtree<std::tuple_size_v<std::decay_t<decltype(std::get<0>(std::declval<typename C::value_type>()))>>>(c);
 }
 
+/**
+ * T - Data type contained in the KD Tree
+ * N - Number of dimensions of the KD Tree (1 == binary tree)
+ * A - Axis function to the position
+            A axis_position; T t;
+            axis_position(t,d) returns the numerical position for the d dimension. If possible it is deduced automatically for random access vectors and the like.
+**/
+template<typename T, std::size_t N, typename A>
+class KDTreeExternal{
+    using real = typename KDTree<T,N,A>::real;
+    KDTree<std::tuple<std::array<real,N>,const T*>,N,RandomAccessTupleFirst> kd;
+    std::vector<T> elements;
+    
+    void build_tree(const A& axis_position) {
+        std::vector<std::tuple<std::array<real,N>,const T*>> pointers(elements.size());
+        for (std::size_t i = 0; i<elements.size(); ++i) {
+            std::get<1>(pointers[i]) = &elements[i];
+            for (std::size_t n = 0; n<N; ++n)
+                std::get<0>(pointers[i])[n] = axis_position(elements[i],n);
+        }
+        kd = KDTree<std::tuple<std::array<real,N>,const T*>,N,RandomAccessTupleFirst>(std::move(pointers));    
+    }
+    
+public:
+    KDTreeExternal(std::vector<T>&& elements, const A& axis_position = A()) : elements(std::move(elements)) { build_tree(axis_position); }
+    KDTreeExternal() {}
+    template<typename C> //Constructing from a general collection if possible
+    KDTreeExternal(const C& c, const A& axis_position = A(), typename std::enable_if<std::is_same<T,typename C::value_type>::value>::type* sfinae = nullptr) : elements(c) { build_tree(axis_position); }
+    
+    template<typename Norm>
+    std::vector<const T*> nearest_neighbors(const std::array<real,N>& p, std::size_t number, float max_distance, const Norm& norm) const {
+        auto pointers = kd.nearest_neighbors(p,number,max_distance,norm);
+        std::vector<const T*> sol(pointers.size());
+        std::transform(pointers.begin(),pointers.end(),sol.begin(), [] (const auto& p) { return std::get<1>(*p); });
+//        for (std::size_t i = 0; i<pointers.size(); ++i) sol[i] = std::get<1>(*pointers[i]);
+        return sol;
+    }
+    
 
+    std::vector<const T*> nearest_neighbors(const std::array<real,N>& p, std::size_t number = 1, float max_distance = std::numeric_limits<float>::infinity()) const {
+        return nearest_neighbors(p,number,max_distance,
+            [] (const std::array<real,N>& v) {
+                real s(0); for (real r : v) s+=r*r; return std::sqrt(s);
+            });            
+    }
+};
+
+template<std::size_t N,typename C,typename A>
+auto kdtree_external(const C& c, const A& ap) { 
+    return KDTreeExternal<std::decay_t<typename C::value_type>,N,std::decay_t<A>>(c,ap); 
+} 
+
+template<std::size_t N, typename C>
+auto kdtree_external(const C& c, std::enable_if_t<std::is_arithmetic_v<std::decay_t<decltype(std::declval<typename C::value_type>()[0])>>>* sfinae = nullptr) {   
+    return kdtree_external<N>(c,RandomAccess());   
+} 
+
+template<typename C>
+auto kdtree_external(const C& c, std::enable_if_t<(std::tuple_size_v<typename C::value_type> >= 1) && 
+            std::is_arithmetic_v<std::decay_t<decltype(std::get<0>(std::declval<typename C::value_type>()))>>>* sfinae = nullptr) {
+    return kdtree_external<std::tuple_size_v<typename C::value_type>>(c);
+}
+
+template<std::size_t N, typename C>
+auto kdtree_external(const C& c, std::enable_if_t<(std::tuple_size_v<typename C::value_type> > 1) && 
+            std::is_arithmetic_v<std::decay_t<decltype(std::get<0>(std::declval<typename C::value_type>())[0])>>>* sfinae = nullptr) {
+    return kdtree_external<N>(c, RandomAccessTupleFirst());
+}
+
+template<typename C>
+auto kdtree_external(const C& c, std::enable_if_t<(std::tuple_size_v<typename C::value_type> > 1) && 
+            std::is_arithmetic_v<std::decay_t<decltype(std::get<0>(std::get<0>(std::declval<typename C::value_type>())))>>>* sfinae = nullptr) {
+    return kdtree_external<std::tuple_size_v<std::decay_t<decltype(std::get<0>(std::declval<typename C::value_type>()))>>>(c);
+}
 
 };
