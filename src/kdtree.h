@@ -31,7 +31,8 @@ template<typename T, std::size_t N, typename A>
 class KDTree {
 public:
     using real = decltype(std::declval<A>()(std::declval<T>(),std::size_t(0)));
-    
+    static constexpr std::size_t dimensions = N;
+   
 private:
     A axis_position;
     using axis_type = std::size_t; //The axis type is std::size_t but we might want to reduce its size in compile time when N<256...
@@ -156,7 +157,7 @@ public:
     template<typename P, typename Norm> //P -> position N dimensional, should have random access
     std::vector<const T*> nearest_neighbors(const P& p, std::size_t number, float max_distance, const Norm& norm) const {
         std::array<real,N> p_impl;
-        for (std::size_t i = 0; i<N; ++i) p_impl = p[i];
+        for (std::size_t i = 0; i<N; ++i) p_impl[i] = p[i];
         return nearest_neighbors(p_impl,number,max_distance,norm);
     }
     
@@ -207,7 +208,11 @@ auto kdtree(const C& c, std::enable_if_t<(std::tuple_size_v<typename C::value_ty
 **/
 template<typename T, std::size_t N, typename A>
 class KDTreeExternal{
+public:
     using real = typename KDTree<T,N,A>::real;
+    static constexpr std::size_t dimensions = N;
+
+private:
     KDTree<std::tuple<std::array<real,N>,const T*>,N,RandomAccessTupleFirst> kd;
     std::vector<T> elements;
     
@@ -232,12 +237,26 @@ public:
         auto pointers = kd.nearest_neighbors(p,number,max_distance,norm);
         std::vector<const T*> sol(pointers.size());
         std::transform(pointers.begin(),pointers.end(),sol.begin(), [] (const auto& p) { return std::get<1>(*p); });
-//        for (std::size_t i = 0; i<pointers.size(); ++i) sol[i] = std::get<1>(*pointers[i]);
         return sol;
     }
     
 
     std::vector<const T*> nearest_neighbors(const std::array<real,N>& p, std::size_t number = 1, float max_distance = std::numeric_limits<float>::infinity()) const {
+        return nearest_neighbors(p,number,max_distance,
+            [] (const std::array<real,N>& v) {
+                real s(0); for (real r : v) s+=r*r; return std::sqrt(s);
+            });            
+    }
+    
+    template<typename P, typename Norm> //P -> position N dimensional, should have random access
+    std::vector<const T*> nearest_neighbors(const P& p, std::size_t number, float max_distance, const Norm& norm) const {
+        std::array<real,N> p_impl;
+        for (std::size_t i = 0; i<N; ++i) p_impl[i] = p[i];
+        return nearest_neighbors(p_impl,number,max_distance,norm);
+    }
+    
+    template<typename P> //P -> position N dimensional, should have random access
+    std::vector<const T*> nearest_neighbors(const P& p, std::size_t number = 1, float max_distance = std::numeric_limits<float>::infinity()) const {
         return nearest_neighbors(p,number,max_distance,
             [] (const std::array<real,N>& v) {
                 real s(0); for (real r : v) s+=r*r; return std::sqrt(s);
